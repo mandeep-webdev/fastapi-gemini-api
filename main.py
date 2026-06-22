@@ -4,7 +4,7 @@ from dotenv import load_dotenv #load variable from .env file
 from fastapi import FastAPI,HTTPException # error handling
 from google import genai # Gemini SDK lets to talk to Gemini api
 from pydantic import BaseModel,field_validator,ValidationError,StrictInt,StrictStr
-from typing import Union
+from typing import Union,Any
 from google.genai.errors import ServerError
 
 load_dotenv() #read .env file
@@ -41,25 +41,56 @@ class TaskRequest(BaseModel):
 class CreateTaskArgs(BaseModel):
     title : str
     completed : bool
+
 class ListTaskArgs(BaseModel):
     pass
+class DeleteTaskArgs(BaseModel):
+    task_id : int
+class UpdateTaskArgs(BaseModel):
+    task_id: int
+    title: str
+    completed: bool
 class ToolCall(BaseModel):
     tool : StrictStr
-    arguments : Union[CreateTaskArgs,ListTaskArgs]
+    arguments : dict[str,Any]
 
 
 tasks = []
-#list of tools
+task_id_counter = 1
+#list of tools 
 def create_task(title:str,completed:bool):
+    global task_id_counter
     task = {
+        "id" : task_id_counter,
         "title" : title,
         "completed" : completed
     }
     tasks.append(task)
+    task_id_counter+=1
     return task
 def list_tasks():
     return tasks
 
+def delete_task(task_id:int):
+    global tasks
+    tasks = [task for task in tasks if task["id"] != task_id]
+    return {"message": "Task deleted"}
+
+def update_task(task_id: int, title: str, completed: bool):
+    for task in tasks:
+        if task["id"] == task_id:
+            task["title"] = title
+            task["completed"] = completed
+
+            return task
+
+    return {"error": "Task not found"}
+SCHEMAS = {
+    "create_task" : CreateTaskArgs,
+    "list_tasks" : ListTaskArgs,
+    "delete_task" : DeleteTaskArgs,
+    "update_task" : UpdateTaskArgs
+}
 @app.post("/extract-profile", response_model=UserProfile)
 def extract_profile(text:str):
     prompt = f"""
@@ -118,6 +149,24 @@ def task_ai(req:TaskRequest):
         "tool": "list_tasks",
         "arguments":{{}}
         }}
+        3. delete_task
+        Use when user wants to delete or remove a task
+        Schema : {{
+        "tool": "delete_task",
+        "arguments": {{
+         "task_id" : integer
+        }}
+        }}
+        4. update_task
+        Use when user wants to modify an existing task
+        Schema : {{
+        "tool" : "update_task",
+        "arguments" : {{
+        "task_id" : integer,
+        "title" : string,
+        "completed" : "boolean"
+        }}
+        }}
 
     Return only valid JSON.
     Donot include Markdown code fences
@@ -136,14 +185,23 @@ def task_ai(req:TaskRequest):
     try:
         response = client.models.generate_content(model="gemini-2.5-flash",contents=prompt)
         data = json.loads(response.text)
-        tool_call = ToolCall(**data)
-        if tool_call.tool == "create_task":
-            return create_task(
-            title = tool_call.arguments.title,
-            completed=tool_call.arguments.completed
-        )
-        elif tool_call.tool == "list_tasks":
-            return list_tasks()
+        print(data)
+        # data = {'tool': 'create_task', 
+        # 'arguments': {'title': 'learn python', 'completed': False}}
+        tool_call = ToolCall(**data) 
+        # tool_call = {"tool" = "create_task", "argumanets" = {}}
+        validation_args_schema = SCHEMAS.get(tool_call.tool) #return schema class
+        validated_args = validation_args_schema(**tool_call.arguments)
+        TOOLS = {
+            "create_task" : create_task,
+            "list_tasks" : list_tasks,
+            "delete_task" : delete_task,
+            "update_task" : update_task
+        }
+        tool_fn = TOOLS.get(tool_call.tool)
+        #Pydantic method model_dump() that converts  Pydantic model into normal Python dictionary.
+        return tool_fn(**validated_args.model_dump())
+        
     except ServerError:
         raise HTTPException(
             status_code=503,

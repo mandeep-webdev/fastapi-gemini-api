@@ -7,6 +7,7 @@ from pydantic import BaseModel,field_validator,ValidationError,StrictInt,StrictS
 from typing import Union,Any
 from google.genai.errors import ServerError
 from google.genai import types
+import math
 
 load_dotenv() #read .env file
 
@@ -40,12 +41,13 @@ def structured_output(req : ProductRequest):
     response = client.models.generate_content(
     model="gemini-2.5-flash",
     contents=req.text,
+    # config gives extra instructions to gemini
     config=types.GenerateContentConfig(
-        response_mime_type="application/json",
+        response_mime_type="application/json", #return json
         response_schema=Product
     )
 )
-    product = response.parsed
+    product = response.parsed # data is already parsed by gemini sdk and stored in parsed key
     return product
 # create tool declaration
 # i am describing my tools here
@@ -173,4 +175,101 @@ def task_native(req: TaskRequest):
     return fn(**function_call.args)
     
 
-   
+
+#Embedding
+
+class EmbeddingReq(BaseModel):
+    text : str
+
+@app.post("/embedding-demo")
+def embedding_demo(req:EmbeddingReq):
+    response = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=req.text
+    )
+    # Input --> {
+    # "text": "React is a JavaScript library"
+    # }
+    # embeddings=[ContentEmbedding(
+    # values=[
+    #     -0.009860573,
+    #     -0.007838764,
+    #     0.002882608,
+    #     -0.06735086,
+    #     -0.02138334,
+    #     <... 3067 more items ...>,
+    # ]
+    # )] 
+    vector = response.embeddings[0].values
+    print(len(vector))
+    print(vector[:10])
+
+
+# mini search-engine project like Google / ChatGPT retrieval system
+documents = [
+    "React is a JavaScript library for UI",
+    "FastAPI is a Python backend framework",
+    "Next.js supports SSR and routing",
+    "Pizza is a popular Italian food"
+]
+
+
+def get_embedding(doc):
+    return client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=doc
+    ).embeddings[0].values
+
+# store embedding of each document
+doc_vectors = []
+
+#store vectors of docs 
+for doc in documents:
+    doc_vectors.append(get_embedding(doc))
+
+#return similarity score range between 0 - 1
+def cosine_similarity(a, b):
+    dot = sum(x*y for x, y in zip(a, b))
+
+    mag_a = math.sqrt(sum(x*x for x in a))
+    mag_b = math.sqrt(sum(x*x for x in b))
+
+    return dot / (mag_a * mag_b)
+
+#retrive top k docs
+def search(input):
+    input_vec = get_embedding(input)
+    scores = []
+    for doc, vec in zip(documents,doc_vectors):
+        score = cosine_similarity(input_vec,vec)
+        scores.append((score,doc))
+    scores.sort(reverse=True)
+    return scores
+
+results = search("frontend framework")
+# pick top 2
+top_docs = [doc for score, doc in results[:2]]
+
+#give context to gemini
+#Context = extra relevant text given to the LLM along with the question
+context = "\n\n".join(top_docs) #double newline between docs
+
+response = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents=f"""
+    Answer the question using the context below.
+    
+    Context: 
+    {context}
+
+    Question:
+    frontend framework
+"""
+)
+print(response.text)
+# [(0.6332622974965787, 'React is a JavaScript library for UI'), 
+#  (0.6328837774601989, 'FastAPI is a Python backend framework'), 
+#  (0.5987360682634203, 'Next.js supports SSR and routing'), 
+#  (0.5340642066240259, 'Pizza is a popular Italian food')
+# ]
+

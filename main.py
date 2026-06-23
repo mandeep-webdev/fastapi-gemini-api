@@ -6,6 +6,7 @@ from google import genai # Gemini SDK lets to talk to Gemini api
 from pydantic import BaseModel,field_validator,ValidationError,StrictInt,StrictStr
 from typing import Union,Any
 from google.genai.errors import ServerError
+from google.genai import types
 
 load_dotenv() #read .env file
 
@@ -15,48 +16,85 @@ client = genai.Client(
     api_key=os.getenv("GOOGLE_API_KEY")
     )
 
-class Request(BaseModel):
-    question : str
-
-    @field_validator("question") #custom validator
-    @classmethod
-    def validate_question(cls,value:str):
-        if not value.strip(): #remove extra spaces from front and back
-            raise ValueError("Question cannot be empty")
-        return value
-
-
-class Response(BaseModel):
-    answer : str
-
-class UserProfile(BaseModel):
-    name : StrictStr
-    experience_years : StrictInt
-    skills : list[StrictStr]
 
 #Learning Function/Tool Calling
 class TaskRequest(BaseModel):
     text : str
 
-class CreateTaskArgs(BaseModel):
-    title : str
-    completed : bool
-
-class ListTaskArgs(BaseModel):
-    pass
-class DeleteTaskArgs(BaseModel):
-    task_id : int
-class UpdateTaskArgs(BaseModel):
-    task_id: int
-    title: str
-    completed: bool
-class ToolCall(BaseModel):
-    tool : StrictStr
-    arguments : dict[str,Any]
-
 
 tasks = []
 task_id_counter = 1
+
+# create tool declaration
+# i am describing my tools here
+create_task_function = types.FunctionDeclaration(
+    name= "create_task",
+    description="Create a new task", #This helps Gemini decide when to use the function.
+    parameters_json_schema={ #This defines the function inputs.
+        "type" : "object", #The function arguments are a dictionary.
+        "properties" : { #This lists all available arguments.
+            "title" : {
+                "type" : "string",
+                "description" : "title of the task"
+            },
+            "completed" : {
+                "type" : "boolean",
+                "description" : "Whether the task is completed"
+            }
+        },
+        "required" : ["title","completed"] #This means Gemini must provide both fields.
+    })
+list_tasks_function = types.FunctionDeclaration(
+    name="list_tasks",
+    description= "shows or lists all tasks",
+    parameters_json_schema= {
+        "type" : "object",
+        "properties" : {
+        }
+    }
+)
+delete_task_function = types.FunctionDeclaration(
+    name="delete_task",
+    description="delete a task",
+    parameters_json_schema= {
+        "type" : "object",
+        "properties" : {
+            "task_id" : {
+                "type" : "integer",
+                "description" : "id of the task to delete"
+            }
+        },
+        "required" : ["task_id"]
+    }
+    
+)
+update_task_function = types.FunctionDeclaration(
+    name="update_task",
+    description= "update a task",
+    parameters_json_schema= {
+        "type" : "object",
+        "properties" : {
+            "task_id" : {
+                "type" : "integer",
+                "description" : "id of the task to be updated"
+            },
+            "title": {
+                "type" : "string",
+                "description" : "title of the task"
+            },
+            "completed" : {
+                "type" : "boolean",
+                "description" : "whether the task is completed"
+            }
+        },
+        "required" : ["task_id","title","completed"]
+    }
+)
+task_tool = types.Tool(
+    function_declarations=[create_task_function,list_tasks_function,delete_task_function,update_task_function]
+)
+
+
 #list of tools 
 def create_task(title:str,completed:bool):
     global task_id_counter
@@ -85,179 +123,32 @@ def update_task(task_id: int, title: str, completed: bool):
             return task
 
     return {"error": "Task not found"}
-SCHEMAS = {
-    "create_task" : CreateTaskArgs,
-    "list_tasks" : ListTaskArgs,
-    "delete_task" : DeleteTaskArgs,
-    "update_task" : UpdateTaskArgs
+
+TOOLS = {
+    "create_task" : create_task,
+    "list_tasks" : list_tasks,
+    "delete_task" : delete_task,
+    "update_task" : update_task
 }
-@app.post("/extract-profile", response_model=UserProfile)
-def extract_profile(text:str):
-    prompt = f"""
-Extract the following information from the text.
-Return ONLY valid JSON.
-Do not incluce Markdown code fences.
-
-Required Fields:
-    name (string)
-    experience_years (Integer)
-    skills (array of strings)
-Text: 
-{text}
-"""
-    
+@app.post("/task-native")
+def task_native(req: TaskRequest):
     response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=prompt)
-    try: 
-        data = json.loads(response.text) # convert json string to python object
-        return UserProfile(**data)
-    except json.JSONDecodeError: #ai doesnot return json string
-        raise HTTPException(
-            status_code=500,
-            detail="AI returned invalid JSON"
-        )
-    except ValidationError: #raise when failed to pydantic model mismatch data types or miising keys
-        raise HTTPException(
-            status_code=500,
-            detail="AI returned invalid data format"
-        )
-
-@app.post("/task-ai")
-def task_ai(req:TaskRequest):
-    prompt = f"""
-    You are a task assistant.
-    Choose the correct tool based on the user's request.
-    
-    Available Tools : 
-        1. create_task
-        Use when the user wants to create a new task.
-
-
-        Schema : 
-        {{
-        "tool" : "create_task,
-        "arguments":{{
-            "title" : string,
-            "completed" : boolean
-        }}
-        }}
-        2. list_tasks
-        Use when user wants to view all the tasks.
-        Schema:
-        {{
-        "tool": "list_tasks",
-        "arguments":{{}}
-        }}
-        3. delete_task
-        Use when user wants to delete or remove a task
-        Schema : {{
-        "tool": "delete_task",
-        "arguments": {{
-         "task_id" : integer
-        }}
-        }}
-        4. update_task
-        Use when user wants to modify an existing task
-        Schema : {{
-        "tool" : "update_task",
-        "arguments" : {{
-        "task_id" : integer,
-        "title" : string,
-        "completed" : "boolean"
-        }}
-        }}
-
-    Return only valid JSON.
-    Donot include Markdown code fences
-    Do not include Explanations
-
- 
-
-    user input: 
-    {req.text}
-
-
-
-    """
-    
-    # print(response.text)
-    try:
-        response = client.models.generate_content(model="gemini-2.5-flash",contents=prompt)
-        data = json.loads(response.text)
-        print(data)
-        # data = {'tool': 'create_task', 
-        # 'arguments': {'title': 'learn python', 'completed': False}}
-        tool_call = ToolCall(**data) 
-        # tool_call = {"tool" = "create_task", "argumanets" = {}}
-        validation_args_schema = SCHEMAS.get(tool_call.tool) #return schema class
-        validated_args = validation_args_schema(**tool_call.arguments)
-        TOOLS = {
-            "create_task" : create_task,
-            "list_tasks" : list_tasks,
-            "delete_task" : delete_task,
-            "update_task" : update_task
-        }
-        tool_fn = TOOLS.get(tool_call.tool)
-        #Pydantic method model_dump() that converts  Pydantic model into normal Python dictionary.
-        return tool_fn(**validated_args.model_dump())
-        
-    except ServerError:
-        raise HTTPException(
-            status_code=503,
-            detail="AI service is temporarily unavailable. Please try again later."
-        )
-    except json.JSONDecodeError: #ai doesnot return json string
-        raise HTTPException(
-            status_code=500,
-            detail="AI returned invalid JSON"
-        )
-    except ValidationError: #raise when failed to pydantic model mismatch data types or miising keys
-        raise HTTPException(
-            status_code=500,
-            detail="AI returned invalid data format"
-        )
-
-
-@app.post("/ask", response_model=Response)
-def ask_ai(req:Request):
-    system_prompt = """
-You are an Ai engineering mentor for beginner developers.
-You specialize in python backend development with FASTAPI and Ai-engineering fundamentals.
-
-
-Explain concepts simply.
-Use practical examples.
-keep response concise.
-
-"""
-    prompt = f"""
-{system_prompt}
-User question : {req.question}
-
-
-
-
-"""
-    try:
-        # if connection failed or authentication failed python go to except block
-        res = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=prompt
-        )
-        # if response is empty
-        if not res.text:
-            raise HTTPException(
-                status_code=502,
-                detail="AI service returned an empty response"
-            )
-        return Response(answer=res.text)
-        
+        contents=req.text,
+        config=types.GenerateContentConfig(
+        tools=[task_tool]
+    ))
+    # gemini return function_call obj
+    # Gemini returns function_call=FunctionCall(
+        #   args={
+        #     'completed': False,
+        #     'title': 'learn FastAPI'
+        #   },
+        #   name='create_task'
+        # ),
+    function_call = response.function_calls[0]
+    fn = TOOLS[function_call.name]
+    return fn(**function_call.args)
+    
 
-    except Exception:
-        raise HTTPException(
-            status_code=503,
-            detail="AI service unavailable"
-        )
-    
-    
+   

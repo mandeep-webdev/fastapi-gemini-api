@@ -8,6 +8,11 @@ from typing import Union,Any
 from google.genai.errors import ServerError
 from google.genai import types
 import math
+import ollama
+from sklearn.metrics.pairwise import cosine_similarity
+
+import faiss
+import numpy as np
 
 load_dotenv() #read .env file
 
@@ -201,8 +206,8 @@ def embedding_demo(req:EmbeddingReq):
     # ]
     # )] 
     vector = response.embeddings[0].values
-    print(len(vector))
-    print(vector[:10])
+    # print(len(vector))
+    # print(vector[:10])
 
 
 # mini search-engine project like Google / ChatGPT retrieval system
@@ -214,18 +219,18 @@ documents = [
 ]
 
 
-def get_embedding(doc):
-    return client.models.embed_content(
-        model="gemini-embedding-001",
-        contents=doc
-    ).embeddings[0].values
+# def get_embedding(doc):
+#     return client.models.embed_content(
+#         model="gemini-embedding-001",
+#         contents=doc
+#     ).embeddings[0].values
 
 # store embedding of each document
 doc_vectors = []
 
 #store vectors of docs 
-for doc in documents:
-    doc_vectors.append(get_embedding(doc))
+# for doc in documents:
+#     doc_vectors.append(get_embedding(doc))
 
 #return similarity score range between 0 - 1
 def cosine_similarity(a, b):
@@ -237,39 +242,98 @@ def cosine_similarity(a, b):
     return dot / (mag_a * mag_b)
 
 #retrive top k docs
-def search(input):
-    input_vec = get_embedding(input)
-    scores = []
-    for doc, vec in zip(documents,doc_vectors):
-        score = cosine_similarity(input_vec,vec)
-        scores.append((score,doc))
-    scores.sort(reverse=True)
-    return scores
+# def search(input):
+#     input_vec = get_embedding(input)
+#     scores = []
+#     for doc, vec in zip(documents,doc_vectors):
+#         score = cosine_similarity(input_vec,vec)
+#         scores.append((score,doc))
+#     scores.sort(reverse=True)
+#     return scores
 
-results = search("frontend framework")
+# results = search("frontend framework")
 # pick top 2
-top_docs = [doc for score, doc in results[:2]]
+# top_docs = [doc for score, doc in results[:2]]
 
 #give context to gemini
 #Context = extra relevant text given to the LLM along with the question
-context = "\n\n".join(top_docs) #double newline between docs
+# context = "\n\n".join(top_docs) #double newline between docs
 
-response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=f"""
-    Answer the question using the context below.
+# response = client.models.generate_content(
+#     model="gemini-2.5-flash",
+#     contents=f"""
+#     Answer the question using the context below.
     
-    Context: 
-    {context}
+#     Context: 
+#     {context}
 
-    Question:
-    frontend framework
-"""
-)
-print(response.text)
+#     Question:
+#     frontend framework
+# """
+# )
+# print(response.text)
 # [(0.6332622974965787, 'React is a JavaScript library for UI'), 
 #  (0.6328837774601989, 'FastAPI is a Python backend framework'), 
 #  (0.5987360682634203, 'Next.js supports SSR and routing'), 
 #  (0.5340642066240259, 'Pizza is a popular Italian food')
 # ]
 
+
+# RAG v1
+knowledge_base = []
+docs = [
+    "React components are reusable UI building blocks.",
+    "useState is a React Hook used to manage local state.",
+    "useEffect is a React Hook that runs side effects after render.",
+    "Next.js supports server-side rendering and routing.",
+    "FastAPI is a Python framework for building APIs."
+]
+
+def get_embedding_from_ollama(doc):
+    return ollama.embed(
+        model="nomic-embed-text",
+        input=doc
+    )
+for doc in docs:
+    embedding = get_embedding_from_ollama(doc)
+    knowledge_base.append({
+        "text" : doc,
+        "embedding" : embedding.embeddings[0]
+    })
+
+query_embedding = get_embedding_from_ollama("what is useEffect").embeddings[0]
+results = []
+for item in knowledge_base:
+    score = cosine_similarity(query_embedding,item["embedding"])
+    results.append((score,item["text"]))
+results.sort(reverse=True)
+top_docs = results[:2]
+texts = [doc for score,doc in top_docs]
+context = "\n\n".join(texts)
+
+
+# RAG v2 - FAISS
+
+#Create embedding matrix
+# dtype means data type
+# When NumPy creates an array, it wants to know: What kind of numbers am I storing?
+embeddings = np.array(
+    [ item["embedding"] for item in knowledge_base],dtype=np.float32
+)
+#print(embeddings.shape) (5,768)
+
+# create search engine or search struc
+# IndexFlatL2 is also doing exact search-- linear but fast
+index = faiss.IndexFlatL2(768) #we are telling FAISS: "Every vector I will store has 768 dimensions."
+index.add(embeddings)
+
+#[] around embedding because faiss wants Because FAISS expects: shape (number_of_queries, dimension)
+query_vector = np.array(
+    [get_embedding_from_ollama("what is useEffect").embeddings[0]],dtype=np.float32
+)
+# 2 means return top_k matches or results
+D, I = index.search(query_vector,2)
+top_docs = [docs[idx] for idx in I[0]]
+
+context = "\n\n".join(top_docs)
+print(context)

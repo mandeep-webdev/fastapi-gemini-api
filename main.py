@@ -10,7 +10,8 @@ from google.genai import types
 import math
 import ollama
 from sklearn.metrics.pairwise import cosine_similarity
-
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 import faiss
 import numpy as np
 
@@ -317,23 +318,101 @@ context = "\n\n".join(texts)
 #Create embedding matrix
 # dtype means data type
 # When NumPy creates an array, it wants to know: What kind of numbers am I storing?
-embeddings = np.array(
-    [ item["embedding"] for item in knowledge_base],dtype=np.float32
-)
+# embeddings = np.array(
+#     [ item["embedding"] for item in knowledge_base],dtype=np.float32
+# )
 #print(embeddings.shape) (5,768)
 
 # create search engine or search struc
 # IndexFlatL2 is also doing exact search-- linear but fast
-index = faiss.IndexFlatL2(768) #we are telling FAISS: "Every vector I will store has 768 dimensions."
-index.add(embeddings)
+# index = faiss.IndexFlatL2(768) #we are telling FAISS: "Every vector I will store has 768 dimensions."
+# index.add(embeddings)
 
 #[] around embedding because faiss wants Because FAISS expects: shape (number_of_queries, dimension)
-query_vector = np.array(
-    [get_embedding_from_ollama("what is useEffect").embeddings[0]],dtype=np.float32
-)
+# query_vector = np.array(
+#     [get_embedding_from_ollama("what is useEffect").embeddings[0]],dtype=np.float32
+# )
 # 2 means return top_k matches or results
-D, I = index.search(query_vector,2)
-top_docs = [docs[idx] for idx in I[0]]
+# D, I = index.search(query_vector,2) #O(n)
+# top_docs = [docs[idx] for idx in I[0]]
 
-context = "\n\n".join(top_docs)
-print(context)
+# context = "\n\n".join(top_docs)
+# prompt = f"""
+# Answer the question using the context below.
+# Context:
+# {context}
+
+# Question:
+# "what is useEffect?"
+# """
+# response = ollama.chat(
+#     model="llama3",
+#     messages=[{
+#         "role" : "user",
+#         "content" : prompt
+#     }]
+# )
+# answer = response["message"]["content"]
+
+# production style rag
+# with open("react_docs.txt","r",encoding="utf-8") as f:
+#     document = f.read()
+loader = TextLoader("react_docs.txt",encoding="utf-8")
+documents = loader.load()
+splitter = RecursiveCharacterTextSplitter(chunk_size = 500,chunk_overlap = 100)
+chunks = splitter.split_documents(documents=documents)
+print(type(chunks))
+print(type(chunks[0]))
+print(chunks[0])
+print(len(chunks))
+# paragraphs = document.split("\n\n")
+
+# paragraph_embeddings = []
+# for p in paragraphs:
+#     embedding = get_embedding_from_ollama(p)
+#     paragraph_embeddings.append(
+#        embedding.embeddings[0]
+#     )
+
+# def chunk_text(document,chunk_size,overlap):
+#     if overlap > chunk_size:
+#         raise ValueError("overlap value must be less than chunk size")
+#     overlapping_by = chunk_size - overlap
+#     chunks = []
+#     start_index = 0
+#     while start_index < len(document):
+#         chunk = document[start_index: start_index + chunk_size]
+#         if overlap < chunk_size:
+#             start_index += overlapping_by
+#         chunks.append(chunk)
+#     return chunks
+
+
+# chunks_list = chunk_text(document,chunk_size=500,overlap=100)
+
+
+# knowledge_basee = []
+
+
+# for chunk in chunks_list:
+#     embedding = get_embedding_from_ollama(chunk)
+#     knowledge_basee.append({
+#         "text" : chunk,
+#         "embedding" : embedding.embeddings[0]
+#     })
+
+# new_embeddings = np.array(
+#     [ item["embedding"] for item in knowledge_basee],dtype=np.float32
+# )
+# index = faiss.IndexFlatL2(768) #we are telling FAISS: "Every vector I will store has 768 dimensions."
+# index.add(new_embeddings)
+# query_vector = np.array(
+#     [get_embedding_from_ollama("what is state management in react").embeddings[0]],dtype=np.float32
+# )
+# D, I = index.search(query_vector,2)
+# print(D)
+# print(I)
+# top_docs = [knowledge_basee[idx]["text"] for idx in I[0]]
+# # print(top_docs)
+# # print(knowledge_basee[14]["text"])
+# print(knowledge_basee[24]["text"])

@@ -11,7 +11,10 @@ import math
 import ollama
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_community.document_loaders import TextLoader
+from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaEmbeddings,ChatOllama
+from langchain_core.prompts import PromptTemplate
 import faiss
 import numpy as np
 
@@ -361,10 +364,45 @@ loader = TextLoader("react_docs.txt",encoding="utf-8")
 documents = loader.load()
 splitter = RecursiveCharacterTextSplitter(chunk_size = 500,chunk_overlap = 100)
 chunks = splitter.split_documents(documents=documents)
-print(type(chunks))
-print(type(chunks[0]))
-print(chunks[0])
-print(len(chunks))
+embedding_model = OllamaEmbeddings(
+    model="nomic-embed-text"
+)
+query =  "What is state management?"
+vector_store = FAISS.from_documents(chunks,embedding_model)
+retriever = vector_store.as_retriever()
+results = retriever.invoke(
+   query
+)
+prompt_template = PromptTemplate(
+    template="""
+You are a React expert.
+
+Use the following context to answer the question.
+
+Context:
+{context}
+
+Question:
+{question}
+
+Answer:
+
+""", input_variables=["context","question"]
+)
+
+context =  [ doc.page_content for doc in results]
+context = "\n\n".join(context)
+
+prompt = prompt_template.invoke({
+    "context" : context,
+    "question" : query
+})
+llm = ChatOllama(
+    model="llama3:latest"
+)
+response = llm.invoke(prompt)
+print(type(response))
+print(response.content)
 # paragraphs = document.split("\n\n")
 
 # paragraph_embeddings = []

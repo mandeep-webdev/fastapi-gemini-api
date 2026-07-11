@@ -26,6 +26,7 @@ from langchain.agents import create_agent
 from langgraph.graph import StateGraph,START,END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.memory import MemorySaver
 from typing import Annotated
 from typing_extensions import TypedDict
 from dotenv import load_dotenv
@@ -553,7 +554,14 @@ def multiply(a:int,b:int):
     """
     return a*b
 
-tools=[multiply]
+@tool
+def add(a:int,b:int):
+     """
+     Add two numbers.
+     """
+     return a + b
+
+tools=[multiply,add]
 # agent = create_agent(
 #     model=llm,
 #     tools=tools,
@@ -567,7 +575,7 @@ tools=[multiply]
 #     Never perform multiplication mentally.
 #     """
 # )
-llm_with_tools = llm.bind_tools([multiply])
+llm_with_tools = llm.bind_tools(tools)
 #print(type(agent))
 # response = agent.invoke(
 #    {
@@ -605,6 +613,7 @@ llm_with_tools = llm.bind_tools([multiply])
 
 
 #----------------------LangGraph-------------
+
 class State(TypedDict):
     messages:Annotated[list[BaseMessage],add_messages]
 
@@ -632,9 +641,38 @@ def should_continue(state:State):
 builder.add_conditional_edges("chatbot",should_continue)
 # loop
 builder.add_edge("tools","chatbot")
-graph = builder.compile()
-graph.invoke({
-    "messages" : [
-        HumanMessage("What is 34*23?")
-    ]
-})
+memory = MemorySaver()
+graph = builder.compile(checkpointer=memory)
+thread_id = input("Enter conversation id: ")
+config = {
+     "configurable" : {
+          "thread_id" : thread_id
+          
+     }
+}
+while True: 
+    
+    user_input = input("You: ")
+
+    if user_input.lower() == "exit":
+        break
+    res = graph.invoke(
+    {
+        "messages" : [
+            HumanMessage(content=user_input)
+        ]
+    },
+    config=config
+   )   
+    ai_response = res["messages"][-1].content
+    print(f"AI: {ai_response}")
+    state = graph.get_state(config)
+    print(state.values)
+    print(state.next)
+
+# for chunk in graph.stream({
+#     "messages" : [
+#         HumanMessage("What is 34 + 23?")
+#     ]
+#     }):
+#         print(chunk)

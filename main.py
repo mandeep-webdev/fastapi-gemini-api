@@ -25,6 +25,7 @@ from langchain_core.messages import ToolMessage,HumanMessage,BaseMessage
 from langchain.agents import create_agent
 from langgraph.graph import StateGraph,START,END
 from langgraph.graph.message import add_messages
+from langgraph.types import interrupt,Command
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from typing import Annotated
@@ -614,61 +615,61 @@ llm_with_tools = llm.bind_tools(tools)
 
 #----------------------LangGraph-------------
 
-class State(TypedDict):
-    messages:Annotated[list[BaseMessage],add_messages]
+# class State(TypedDict):
+#     messages:Annotated[list[BaseMessage],add_messages]
 
-#empty workflow
-builder = StateGraph(State)
+# #empty workflow
+# builder = StateGraph(State)
 
-#Node
-def chatbot_node(state:State):
-    response = llm_with_tools.invoke(state["messages"])
-    return {
-        "messages" : [response]
-    }
-builder.add_node("chatbot",chatbot_node)
-builder.add_node("tools",ToolNode(tools))
-builder.add_edge(START,"chatbot")
+# #Node
+# def chatbot_node(state:State):
+#     response = llm_with_tools.invoke(state["messages"])
+#     return {
+#         "messages" : [response]
+#     }
+# builder.add_node("chatbot",chatbot_node)
+# builder.add_node("tools",ToolNode(tools))
+# builder.add_edge(START,"chatbot")
 
-#routing conditional edge
-def should_continue(state:State):
-    last_msg = state["messages"][-1]
+# #routing conditional edge
+# def should_continue(state:State):
+#     last_msg = state["messages"][-1]
 
-    if last_msg.tool_calls:
-        return "tools"
+#     if last_msg.tool_calls:
+#         return "tools"
     
-    return END
-builder.add_conditional_edges("chatbot",should_continue)
-# loop
-builder.add_edge("tools","chatbot")
-memory = MemorySaver()
-graph = builder.compile(checkpointer=memory)
-thread_id = input("Enter conversation id: ")
-config = {
-     "configurable" : {
-          "thread_id" : thread_id
+#     return END
+# builder.add_conditional_edges("chatbot",should_continue)
+# # loop
+# builder.add_edge("tools","chatbot")
+# memory = MemorySaver()
+# graph = builder.compile(checkpointer=memory)
+# thread_id = input("Enter conversation id: ")
+# config = {
+#      "configurable" : {
+#           "thread_id" : thread_id
           
-     }
-}
-while True: 
+#      }
+# }
+# while True: 
     
-    user_input = input("You: ")
+#     user_input = input("You: ")
 
-    if user_input.lower() == "exit":
-        break
-    res = graph.invoke(
-    {
-        "messages" : [
-            HumanMessage(content=user_input)
-        ]
-    },
-    config=config
-   )   
-    ai_response = res["messages"][-1].content
-    print(f"AI: {ai_response}")
-    state = graph.get_state(config)
-    print(state.values)
-    print(state.next)
+#     if user_input.lower() == "exit":
+#         break
+#     res = graph.invoke(
+#     {
+#         "messages" : [
+#             HumanMessage(content=user_input)
+#         ]
+#     },
+#     config=config
+#    )   
+#     ai_response = res["messages"][-1].content
+#     print(f"AI: {ai_response}")
+#     state = graph.get_state(config)
+#     print(state.values)
+#     print(state.next)
 
 # for chunk in graph.stream({
 #     "messages" : [
@@ -676,3 +677,37 @@ while True:
 #     ]
 #     }):
 #         print(chunk)
+
+
+#---------------------interrupts------------
+
+class State(TypedDict):
+    pass
+
+def approval_node(state:State):
+    approval = interrupt("Do you approve?")
+    print(f"Approval: {approval}")
+    return {}
+
+builder = StateGraph(State)
+builder.add_node("approval",approval_node)
+builder.add_edge(START,"approval")
+builder.add_edge("approval",END)
+memory = MemorySaver()
+config = {
+    "configurable" : {
+        "thread_id" : "thread-1"
+    }
+}
+graph = builder.compile(
+    checkpointer=memory
+)
+res = graph.invoke(
+    {},
+    config=config
+)
+print(res)
+graph.invoke(
+    Command(resume=True),
+    config=config
+)
